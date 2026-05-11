@@ -1,0 +1,203 @@
+services:
+  # MySQL Database
+  mysql:
+    image: mysql:8.0
+    container_name: news_mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-rootpassword}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-news_aggregator}
+      MYSQL_USER: ${MYSQL_USER:-news_user}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-news_password}
+    ports:
+      - "${MYSQL_PORT:-3306}:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./mysql-init:/docker-entrypoint-initdb.d
+    networks:
+      - news_network
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      timeout: 20s
+      retries: 10
+      interval: 10s
+
+  # Redis Cache (for RAG and rate limiting)
+  redis:
+    image: redis:7-alpine
+    container_name: news_redis
+    restart: unless-stopped
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - news_network
+    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD:-}
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ChromaDB Vector Database (for RAG)
+  chromadb:
+    image: chromadb/chroma:latest
+    container_name: news_chromadb
+    restart: unless-stopped
+    ports:
+      - "${CHROMA_PORT:-8001}:8000"
+    volumes:
+      - chroma_data:/chroma/chroma
+    environment:
+      - IS_PERSISTENT=TRUE
+      - PERSIST_DIRECTORY=/chroma/chroma
+    networks:
+      - news_network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/heartbeat"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  # Ollama (Local LLM for RAG Chatbot)
+  ollama:
+    image: ollama/ollama:latest
+    container_name: news_ollama
+    restart: unless-stopped
+    ports:
+      - "${OLLAMA_PORT:-11434}:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    networks:
+      - news_network
+    environment:
+      - OLLAMA_HOST=0.0.0.0
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:11434"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  # Backend API
+  backend:
+    build: ./backend
+    container_name: news_backend
+    restart: unless-stopped
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      chromadb:
+        condition: service_healthy
+      ollama:
+        condition: service_healthy
+    environment:
+      # Database
+      MYSQL_HOST: mysql
+      MYSQL_PORT: 3306
+      MYSQL_USER: ${MYSQL_USER:-news_user}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-news_password}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-news_aggregator}
+      
+      # Redis
+      REDIS_URL: redis://:${REDIS_PASSWORD:-}@redis:6379
+      
+      # ChromaDB
+      CHROMA_HOST: chromadb
+      CHROMA_PORT: 8000
+      
+      # Ollama
+      OLLAMA_URL: http://ollama:11434
+      
+      # API Settings
+      SCRAPING_INTERVAL: ${SCRAPING_INTERVAL:-300}
+      CORS_ORIGINS: ${CORS_ORIGINS:-["http://localhost:3000","http://localhost:5173","http://localhost"]}
+      
+      # Logging
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    ports:
+      - "${BACKEND_PORT:-8000}:8000"
+    volumes:
+      - ./backend:/app
+      - chroma_data:/app/chroma_db
+    networks:
+      - news_network
+    command: >
+      sh -c "
+      python -c 'from app.database.connection import init_db; init_db()' &&
+      python -c 'from app.services.rag_service import RAGService; import asyncio; asyncio.run(RAGService().ensure_indexed())' &&
+      uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+      "
+
+  # Celery Worker (for background tasks)
+  celery:
+    build: ./backend
+    container_name: news_celery
+    restart: unless-stopped
+    depends_on:
+      - redis
+      - mysql
+    environment:
+      MYSQL_HOST: mysql
+      REDIS_URL: redis://:${REDIS_PASSWORD:-}@redis:6379
+    volumes:
+      - ./backend:/app
+    networks:
+      - news_network
+    command: celery -A app.tasks.celery_app worker --loglevel=info
+
+  # Celery Beat (for scheduled tasks)
+  celery-beat:
+    build: ./backend
+    container_name: news_celery_beat
+    restart: unless-stopped
+    depends_on:
+      - redis
+      - celery
+    environment:
+      REDIS_URL: redis://:${REDIS_PASSWORD:-}@redis:6379
+    volumes:
+      - ./backend:/app
+    networks:
+      - news_network
+    command: celery -A app.tasks.celery_app beat --loglevel=info
+
+  # Frontend
+  frontend:
+    build: ./frontend
+    container_name: news_frontend
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - "${FRONTEND_PORT:-80}:80"
+    networks:
+      - news_network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+# Networks
+networks:
+  news_network:
+    driver: bridge
+    name: news_network
+
+# Volumes
+volumes:
+  mysql_data:
+    driver: local
+    name: news_mysql_data
+  redis_data:
+    driver: local
+    name: news_redis_data
+  chroma_data:
+    driver: local
+    name: news_chroma_data
+  ollama_data:
+    driver: local
+    name: news_ollama_data

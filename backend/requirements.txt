@@ -31,3 +31,13 @@ pytz==2023.3
 
 # Async Support
 aiofiles==23.2.1
+
+
+# RAG & Vector Database
+chromadb==0.4.22
+sentence-transformers==2.2.2
+langchain==0.1.0
+
+# LLM (Choose one)
+# Option 1: Ollama (Free, local)
+ollama==0.1.0

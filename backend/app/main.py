@@ -9,9 +9,12 @@ from .api.routes import news_router, search_router
 from .services.news_service import NewsService
 from .database.connection import SessionLocal
 import asyncio
+from app.api.routes.chat import router as chat_router
 
 # Global flag for scraper
 scraper_running = False
+
+
 
 def run_scraper_periodically():
     """Run scraper in background thread"""
@@ -65,6 +68,7 @@ app.add_middleware(
 # Include routers
 app.include_router(news_router)
 app.include_router(search_router)
+app.include_router(chat_router)
 
 @app.get("/")
 async def root():
@@ -74,7 +78,8 @@ async def root():
         "endpoints": {
             "docs": "/docs",
             "news": "/api/news",
-            "search": "/api/search"
+            "search": "/api/search",
+            "chat": "/api/chat/ask"
         }
     }
 

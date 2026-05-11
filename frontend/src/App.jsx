@@ -5,6 +5,7 @@ import FilterBar from './components/FilterBar';
 import SearchBar from './components/SeachBar';
 import SmartFilters from './components/SmartFilters';
 import { fetchNews, searchNews, getTrendingNews, getFilterInfo } from './services/api';
+import ChatBot from './components/ChatBot';
 
 function App() {
   const [news, setNews] = useState([]);
@@ -225,7 +226,9 @@ function App() {
         }}
         filterInfo={filterInfo}
       />
+      <ChatBot />
     </div>
+    
   );
 }
 
